@@ -34,14 +34,12 @@ class MainViewModel(private val repository: ReflowOvenRepository) : ViewModel() 
                 if (isConnected) {
                     ovenStateJob?.cancel()
 
-                    // Reset graph data on new connection
                     _tempHistory.value = emptyList()
                     timeIndex = 0f
 
                     ovenStateJob = viewModelScope.launch {
                         repository.getOvenState().collect { state ->
                             _ovenState.value = state
-                            // Update graph with new temp
                             addGraphPoint(state.currentTemperature)
                         }
                     }

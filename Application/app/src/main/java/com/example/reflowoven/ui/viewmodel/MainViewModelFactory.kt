@@ -9,7 +9,6 @@ class MainViewModelFactory : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
-            // In a real app, you'd use a dependency injection framework
             val communicationService = WiFiService()
             val repository = ReflowOvenRepository(communicationService)
             return MainViewModel(repository) as T
