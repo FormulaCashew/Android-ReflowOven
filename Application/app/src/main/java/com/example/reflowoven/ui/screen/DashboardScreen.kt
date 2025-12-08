@@ -19,6 +19,9 @@ import com.example.reflowoven.ui.viewmodel.MainViewModelFactory
 fun DashboardScreen(viewModel: MainViewModel = viewModel(factory = MainViewModelFactory())) {
     val ovenState by viewModel.ovenState.collectAsState()
     val isConnected by viewModel.isConnected.collectAsState()
+
+    val tempHistory by viewModel.tempHistory.collectAsState()
+
     var showConnectionDialog by remember { mutableStateOf(false) }
     var showProfileDialog by remember { mutableStateOf(false) }
 
@@ -40,10 +43,11 @@ fun DashboardScreen(viewModel: MainViewModel = viewModel(factory = MainViewModel
 
     val predefinedProfiles = listOf(leadFreeProfile, leadedProfile)
 
+
     if (showConnectionDialog) {
         ConnectionDialog(
-            onConnect = {
-                ip, port -> viewModel.connect(ip, port)
+            onConnect = { ip, port ->
+                viewModel.connect(ip, port)
                 showConnectionDialog = false
             },
             onDismiss = { showConnectionDialog = false }
@@ -66,29 +70,49 @@ fun DashboardScreen(viewModel: MainViewModel = viewModel(factory = MainViewModel
             .fillMaxSize()
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
     ) {
-        Text(text = "Current Temperature: ${ovenState.currentTemperature}°C")
+        Spacer(modifier = Modifier
+            .height(20.dp)
+        )
+        Text(text = "Reflow Monitor", style = MaterialTheme.typography.headlineSmall)
+        Spacer(modifier = Modifier
+            .height(8.dp)
+        )
+
+        OvenChart(points = tempHistory)
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Text(text = "Current Temperature: ${ovenState.currentTemperature}°C", style = MaterialTheme.typography.titleMedium)
         Spacer(modifier = Modifier.height(8.dp))
-        Text(text = "Status: ${ovenState.status}")
-        Spacer(modifier = Modifier.height(16.dp))
+        Text(text = "Status: ${ovenState.status}", style = MaterialTheme.typography.bodyLarge)
+
+        Spacer(modifier = Modifier.height(32.dp))
 
         if (isConnected) {
-            Row {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
                 Button(onClick = { showProfileDialog = true }) {
                     Text("START")
                 }
-                Spacer(modifier = Modifier.width(8.dp))
-                Button(onClick = { viewModel.stopOven() }) {
+                Button(
+                    onClick = { viewModel.stopOven() },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
                     Text("STOP")
                 }
-                Spacer(modifier = Modifier.width(8.dp))
-                Button(onClick = { viewModel.disconnect() }) {
-                    Text("Disconnect")
-                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+            OutlinedButton(onClick = { viewModel.disconnect() }) {
+                Text("Disconnect")
             }
         } else {
-            Button(onClick = { showConnectionDialog = true }) {
+            Button(
+                onClick = { showConnectionDialog = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 Text("Connect")
             }
         }
