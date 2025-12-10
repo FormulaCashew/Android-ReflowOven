@@ -166,3 +166,152 @@ Responsable de la comunicación con el mundo exterior.
     \item \texttt{ReflowOvenRepository.kt}: Patrón repositorio que abstrae la fuente de datos.
     \item \texttt{WiFiService.kt}: Implementación de bajo nivel de \texttt{CommunicationService}. Maneja los \texttt{Sockets}, \texttt{PrintWriters} y \texttt{Scanners}.
 \end{itemize}
+
+% ==========================================
+% CAPÍTULO 3
+% ==========================================
+\chapter{Dinámica de Ejecución y Trazabilidad}
+
+Esta sección es el núcleo técnico del documento. Se desglosa la jerarquía de llamadas funcionales para los procesos críticos del sistema.
+
+\section{Traza 1: Ciclo de Monitoreo (Polling Loop)}
+Este proceso es responsable de mantener la gráfica y los textos de estado actualizados en tiempo real.
+
+\begin{calltrace}{Actualización de Estado del Horno}
+\textbf{Contexto:} \texttt{MainViewModel} inicia una corrutina tras una conexión exitosa.
+
+\begin{enumerate}
+    \item \texttt{\textbf{MainViewModel}}:
+    \begin{itemize}
+        \item Llama a \texttt{repository.getOvenState()}.
+        \item Inicia bloque \texttt{collect} (observador) sobre el flujo retornado.
+    \end{itemize}
+    
+    \item $\hookrightarrow$ \texttt{\textbf{ReflowOvenRepository}}:
+    \begin{itemize}
+        \item Redirige la llamada a \texttt{communicationService.getOvenState()}.
+    \end{itemize}
+    
+    \item $\hookrightarrow$ \texttt{\textbf{WiFiService}} (Hilo: \texttt{Dispatchers.IO}):
+    \begin{itemize}
+        \item Entra en bucle \texttt{while (isConnected)}.
+        \item \texttt{sendCommand("STATUS?\textbackslash n")}: Escribe en el Socket.
+        \item \texttt{reader.nextLine()}: \textbf{Bloqueo} esperando respuesta del hardware.
+        \item \textit{Parsing}: Divide la cadena recibida por delimitadores ``;''.
+        \item Instancia \texttt{OvenState(temp, target, stage...)}.
+        \item \texttt{emit(ovenState)}: Envía el objeto a través del flujo.
+        \item \texttt{delay(1000)}: Espera no bloqueante antes del siguiente ciclo.
+    \end{itemize}
+    
+    \item $\leftarrow$ \textit{Retorno a} \texttt{\textbf{MainViewModel}} (Hilo: \texttt{Main}):
+    \begin{itemize}
+        \item Recibe \texttt{OvenState}.
+        \item Actualiza \texttt{\_ovenState.value} $\rightarrow$ Dispara recomposición de Textos.
+        \item Llama a función interna \texttt{addGraphPoint(temp)}.
+        \begin{itemize}
+            \item Añade punto a \texttt{\_tempHistory}.
+            \item Si \texttt{size > 120}, elimina el índice 0 (FIFO).
+            \item Actualiza \texttt{\_tempHistory.value}.
+        \end{itemize}
+    \end{itemize}
+    
+    \item $\leftarrow$ \textit{Reacción en} \texttt{\textbf{DashboardScreen}}:
+    \begin{itemize}
+        \item \texttt{collectAsState} detecta cambio en \texttt{tempHistory}.
+        \item Pasa los nuevos datos al composable \texttt{OvenChart}.
+    \end{itemize}
+
+    \item $\hookrightarrow$ \texttt{\textbf{OvenChart}}:
+    \begin{itemize}
+        \item Bloque \texttt{update}: Recibe los puntos nuevos.
+        \item Actualiza el \texttt{LineDataSet} de la librería MPAndroidChart.
+        \item Llama a \texttt{chart.notifyDataSetChanged()} e \texttt{invalidate()}.
+    \end{itemize}
+\end{enumerate}
+\end{calltrace}
+
+\section{Traza 2: Inyección de Perfil (Comando START)}
+Proceso desencadenado cuando el usuario selecciona un perfil y pulsa "Start".
+
+\begin{calltrace}{Envío de Perfil de Soldadura}
+\textbf{Contexto:} Interacción de usuario en \texttt{DashboardScreen}.
+
+\begin{enumerate}
+    \item \texttt{\textbf{DashboardScreen}}:
+    \begin{itemize}
+        \item Callback \texttt{onProfileSelected}.
+        \item Llama a \texttt{viewModel.startOven(reflowProfile)}.
+    \end{itemize}
+    
+    \item $\hookrightarrow$ \texttt{\textbf{MainViewModel}}:
+    \begin{itemize}
+        \item \texttt{launch}: Inicia nueva corrutina.
+        \item Limpieza: \texttt{\_tempHistory.value = emptyList()}.
+        \item Reinicio: \texttt{timeIndex = 0f}.
+        \item Llama a \texttt{repository.startOven(profile)}.
+    \end{itemize}
+    
+    \item $\hookrightarrow$ \texttt{\textbf{ReflowOvenRepository}}:
+    \begin{itemize}
+        \item Delega a \texttt{communicationService.startOven(profile)}.
+    \end{itemize}
+    
+    \item $\hookrightarrow$ \texttt{\textbf{WiFiService}} (Hilo: \texttt{Dispatchers.IO}):
+    \begin{itemize}
+        \item \textbf{Serialización}: Transforma el objeto \texttt{ReflowProfile} en cadena.
+        \item Construye string: \texttt{"START;" + stage.temp + ";" + stage.time ...}
+        \item Llama a \texttt{sendCommand(string)}.
+        \begin{itemize}
+            \item \texttt{writer.print(command)}.
+            \item \texttt{writer.flush()}: Fuerza el envío del paquete TCP inmediatamente.
+        \end{itemize}
+    \end{itemize}
+\end{enumerate}
+\end{calltrace}
+
+% ==========================================
+% CAPÍTULO 4
+% ==========================================
+\chapter{Especificación del Protocolo de Comunicación}
+
+El sistema utiliza un protocolo basado en texto ASCII sobre TCP/IP. La aplicación actúa como Cliente TCP y el Horno como Servidor TCP.
+
+\section{Formato de Comandos (Cliente $\rightarrow$ Horno)}
+Los comandos finalizan con un carácter de nueva línea (\texttt{\textbackslash n}).
+
+\begin{longtable}{@{}p{4cm}p{10cm}@{}}
+\toprule
+\textbf{Comando} & \textbf{Descripción y Estructura} \\ \midrule
+\endhead
+
+\texttt{STATUS?} & 
+Solicita el estado actual. No requiere parámetros. \\ \hline
+
+\texttt{STOP} & 
+Detiene el proceso de calentamiento inmediatamente. \\ \hline
+
+\texttt{START;<Stages>} & 
+Inicia el horno con un perfil específico. La estructura de \texttt{<Stages>} es una lista serializada de temperatura y duración. \newline
+\textit{Ejemplo:} \texttt{START;Soak;150;90;Reflow;245;30} \\ \hline
+
+\texttt{PROFILE;<Stages>} & 
+Carga un perfil en memoria sin iniciar el proceso inmediatamente. Sigue la misma serialización que START. \\ 
+\bottomrule
+\caption{Tabla de Comandos de Control}
+\end{longtable}
+
+\section{Formato de Respuesta (Horno $\rightarrow$ Cliente)}
+El horno responde al comando \texttt{STATUS?} con una cadena delimitada por punto y coma (;).
+
+\begin{tcolorbox}[colback=codeBackground, title=Estructura de Trama STATUS]
+\texttt{STATUS;CurrentTemp;TargetTemp;StageName;TimeElapsed}
+\end{tcolorbox}
+
+\textbf{Mapeo de Datos en \texttt{WiFiService.kt}:}
+\begin{itemize}
+    \item \texttt{parts[0]} $\rightarrow$ Cabecera ("STATUS")
+    \item \texttt{parts[1]} $\rightarrow$ \texttt{currentTemperature} (Float)
+    \item \texttt{parts[2]} $\rightarrow$ \texttt{targetTemperature} (Float)
+    \item \texttt{parts[3]} $\rightarrow$ \texttt{stage} (String, e.g., "Soak")
+    \item \texttt{parts[4]} $\rightarrow$ \texttt{timeElapsed} (Long)
+\end{itemize}
