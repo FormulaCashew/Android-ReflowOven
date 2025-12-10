@@ -1,0 +1,168 @@
+\documentclass[11pt, a4paper, oneside]{report}
+
+% ==========================================
+% PAQUETES Y CONFIGURACIÓN
+% ==========================================
+\usepackage[utf8]{inputenc}
+\usepackage[spanish, es-tabla]{babel}
+\usepackage[T1]{fontenc}
+\usepackage{helvet} % Fuente más moderna (Helvetica)
+\renewcommand{\familydefault}{\sfdefault}
+
+\usepackage{geometry}
+\geometry{top=3cm, bottom=3cm, left=3cm, right=2.5cm}
+
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{tcolorbox} % Para cajas de texto profesionales
+\usepackage{enumitem}
+\usepackage{booktabs} % Tablas profesionales
+\usepackage{longtable}
+
+% Definición de Colores Corporativos/Técnicos
+\definecolor{primaryBlue}{RGB}{0, 51, 102}
+\definecolor{accentTeal}{RGB}{0, 128, 128}
+\definecolor{lightGray}{RGB}{245, 245, 245}
+\definecolor{codeBackground}{RGB}{250, 250, 250}
+\definecolor{callStackColor}{RGB}{240, 248, 255}
+
+% Configuración de Hipervínculos
+\hypersetup{
+    colorlinks=true,
+    linkcolor=primaryBlue,
+    filecolor=magenta,      
+    urlcolor=accentTeal,
+    pdftitle={Documentación Técnica - Reflow Oven Controller},
+}
+
+% Configuración de Encabezados y Pies de Página
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\textcolor{gray}{\small Reflow Oven Controller - Android Architecture}}
+\rhead{\textcolor{gray}{\small Versión 1.0}}
+\cfoot{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0.4pt}
+
+% Configuración de Estilos de Código (Kotlin)
+\lstdefinestyle{kotlinStyle}{
+    language=Java, % Kotlin se basa en JVM, Java es buena aproximación para highlight
+    backgroundcolor=\color{codeBackground},   
+    commentstyle=\color{gray}\itshape,
+    keywordstyle=\color{primaryBlue}\bfseries,
+    numberstyle=\tiny\color{gray},
+    stringstyle=\color{accentTeal},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2,
+    frame=leftline,
+    rulecolor=\color{accentTeal},
+    xleftmargin=10pt,
+}
+\lstset{style=kotlinStyle}
+
+% Formato de Títulos
+\titleformat{\chapter}[display]
+  {\normalfont\huge\bfseries\color{primaryBlue}}{\chaptertitlename\ \thechapter}{20pt}{\Huge}
+\titleformat{\section}
+  {\normalfont\Large\bfseries\color{primaryBlue}}{\thesection}{1em}{}
+\titleformat{\subsection}
+  {\normalfont\large\bfseries\color{accentTeal}}{\thesubsection}{1em}{}
+
+% Definición de Cajas para "Lógica de Llamadas"
+\newtcolorbox{calltrace}[1]{
+  colback=callStackColor,
+  colframe=primaryBlue,
+  title=\textbf{Traza de Ejecución: #1},
+  fonttitle=\bfseries,
+  boxrule=0.5mm,
+  sharp corners=south,
+  rounded corners=north
+}
+
+% ==========================================
+% DOCUMENTO
+% ==========================================
+
+\begin{document}
+
+% --- PORTADA ---
+\begin{titlepage}
+    \centering
+    \vspace*{2cm}
+    
+    {\Huge \textbf{\textcolor{primaryBlue}{SISTEMA DE CONTROL PARA HORNO DE REFLUJO}}}\\[0.5cm]
+    {\Large \textit{Documentación Técnica de Software Android}}\\[2cm]
+    
+    \textbf{Arquitectura:} MVVM (Model-View-ViewModel)\\
+    \textbf{Lenguaje:} Kotlin / Jetpack Compose\\
+    \textbf{Protocolo:} TCP Sockets (Raw ASCII)\\[3cm]
+    
+    \vfill
+    
+    \textbf{Departamento de Ingeniería en Automatización}\\
+    \today
+    
+\end{titlepage}
+
+% --- INDICE ---
+\tableofcontents
+\newpage
+
+% ==========================================
+% CAPÍTULO 1
+% ==========================================
+\chapter{Visión General del Sistema}
+
+\section{Introducción}
+El presente documento detalla la arquitectura de software, la dinámica de ejecución y los protocolos de comunicación de la aplicación móvil "Reflow Oven Controller". Este sistema permite la supervisión remota y el control de lazo cerrado de un horno de soldadura mediante una interfaz gráfica reactiva y comunicación de red en tiempo real.
+
+\section{Alcance Técnico}
+El software ha sido diseñado bajo los principios de \textit{Clean Architecture} simplificada, implementando el patrón \textbf{MVVM}. Sus responsabilidades principales incluyen:
+\begin{enumerate}
+    \item \textbf{Gestión de Conectividad:} Establecimiento y mantenimiento de sockets TCP persistentes.
+    \item \textbf{Visualización de Datos:} Renderizado de gráficos de temperatura vs. tiempo a 60 FPS.
+    \item \textbf{Inyección de Perfiles:} Serialización y transmisión de etapas de soldadura (Soak, Reflow).
+    \item \textbf{Concurrencia:} Manejo de hilos en segundo plano para operaciones de E/S.
+\end{enumerate}
+
+% ==========================================
+% CAPÍTULO 2
+% ==========================================
+\chapter{Arquitectura de Software}
+
+La aplicación se estructura en tres capas lógicas claramente diferenciadas para garantizar la escalabilidad y testabilidad.
+
+\section{Capa de Presentación (UI Layer)}
+Implementada utilizando \textbf{Jetpack Compose}. Esta capa es puramente reactiva; no contiene lógica de negocio, solo lógica de renderizado basada en estados.
+\begin{itemize}
+    \item \texttt{MainActivity.kt}: Punto de entrada del sistema Android. Configura el tema y el contenedor de superficie.
+    \item \texttt{DashboardScreen.kt}: Composable principal. Observa los flujos (\textit{Flows}) del ViewModel y redibuja la interfaz cuando los datos cambian.
+    \item \texttt{OvenChart.kt}: Wrapper de interoperabilidad que incrusta una vista de Android clásica (\texttt{MPAndroidChart}) dentro de la jerarquía de Compose.
+\end{itemize}
+
+\section{Capa de Lógica de Negocio (ViewModel Layer)}
+\texttt{MainViewModel.kt} actúa como el cerebro de la aplicación.
+\begin{itemize}
+    \item Transforma los datos crudos del repositorio en estados consumibles por la UI (\texttt{StateFlow}).
+    \item Gestiona el ciclo de vida de las corrutinas (\texttt{viewModelScope}), asegurando que no haya fugas de memoria si la vista se destruye.
+    \item Contiene la lógica de limitación del historial gráfico (buffer circular de 120 puntos).
+\end{itemize}
+
+\section{Capa de Datos (Data Layer)}
+Responsable de la comunicación con el mundo exterior.
+\begin{itemize}
+    \item \texttt{ReflowOvenRepository.kt}: Patrón repositorio que abstrae la fuente de datos.
+    \item \texttt{WiFiService.kt}: Implementación de bajo nivel de \texttt{CommunicationService}. Maneja los \texttt{Sockets}, \texttt{PrintWriters} y \texttt{Scanners}.
+\end{itemize}
