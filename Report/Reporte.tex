@@ -315,3 +315,206 @@ El horno responde al comando \texttt{STATUS?} con una cadena delimitada por punt
     \item \texttt{parts[3]} $\rightarrow$ \texttt{stage} (String, e.g., "Soak")
     \item \texttt{parts[4]} $\rightarrow$ \texttt{timeElapsed} (Long)
 \end{itemize}
+
+% ==========================================
+% CAPÍTULO 5
+% ==========================================
+\chapter{Gestión de Concurrencia y Memoria}
+
+\section{Uso de Corrutinas}
+Kotlin Coroutines se utiliza para evitar el bloqueo del \textit{Main Thread} (UI Thread).
+\begin{itemize}
+    \item \textbf{Dispatchers.IO:} Utilizado exclusivamente en \texttt{WiFiService}. Optimizado para operaciones de bloqueo de E/S como \texttt{socket.read()} o \texttt{writer.flush()}.
+    \item \textbf{ViewModelScope:} Define el alcance de las corrutinas. Si el usuario cierra la aplicación o cambia de pantalla, este scope cancela automáticamente las peticiones de red pendientes, evitando \textit{memory leaks}.
+\end{itemize}
+
+\section{Optimización de Gráficos}
+Dado que el horno puede operar por largos periodos, la acumulación de puntos en la gráfica representa un riesgo de consumo de memoria.
+\begin{lstlisting}[language=Java, caption=Lógica de Buffer Circular en MainViewModel]
+private fun addGraphPoint(temp: Float) {
+    val currentList = _tempHistory.value.toMutableList()
+    currentList.add(Entry(timeIndex, temp))
+    timeIndex += 1f
+    
+    // Protección de Memoria: Ventana deslizante
+    if (currentList.size > 120) {
+        currentList.removeAt(0)
+    }
+    _tempHistory.value = ArrayList(currentList)
+}
+\end{lstlisting}
+Esta lógica asegura que la aplicación mantenga un consumo de RAM constante (O(1)) independientemente de la duración del proceso de soldadura.
+
+% ==========================================
+% CAPÍTULO 6 (NUEVO)
+% ==========================================
+\chapter{Diccionario de Funciones y Lógica Operativa}
+
+En este capítulo se desglosa la totalidad de las funciones implementadas en el sistema, detallando su lógica interna, dependencias y efectos colaterales en el flujo de ejecución.
+
+\section{Módulo: MainViewModel (Lógica de Negocio)}
+
+Este componente orquesta la interacción entre la UI y los datos. Todas las funciones aquí se ejecutan inicialmente en el \textit{Main Thread} pero delegan operaciones pesadas a corrutinas.
+
+\begin{description}[style=multiline, leftmargin=3cm, font=\bfseries\color{primaryBlue}]
+
+    \item[connect(ip, port)]
+    \textbf{Propósito:} Inicia el intento de conexión con el hardware y, si tiene éxito, arranca el monitoreo.\\
+    \textbf{Lógica de Llamadas:}
+    \begin{enumerate}
+        \item Lanza corrutina en \texttt{viewModelScope}.
+        \item Invoca \texttt{repository.connect(ip, port)}.
+        \item Recolecta el flujo booleano resultante.
+        \item \textit{Si es True:} 
+            \begin{itemize}
+                \item Cancela trabajos anteriores (\texttt{ovenStateJob?.cancel}).
+                \item Reinicia gráficas (\texttt{\_tempHistory = empty}).
+                \item Inicia nueva corrutina interna que llama a \texttt{repository.getOvenState()} para comenzar el polling.
+            \end{itemize}
+        \item \textit{Si es False:} Cancela cualquier job activo.
+    \end{itemize}
+
+    \item[disconnect()]
+    \textbf{Propósito:} Cierra la conexión y limpia el estado de la UI.\\
+    \textbf{Lógica de Llamadas:}
+    \begin{enumerate}
+        \item Cancela la corrutina de monitoreo (\texttt{ovenStateJob}).
+        \item Invoca \texttt{repository.disconnect()} (función suspendida).
+        \item Fuerza el estado \texttt{\_isConnected} a \texttt{false}.
+        \item Resetea \texttt{\_ovenState} a valores por defecto (Idle).
+    \end{enumerate}
+
+    \item[startOven(profile)]
+    \textbf{Propósito:} Envía un perfil de soldadura y ordena el inicio del proceso.\\
+    \textbf{Lógica de Llamadas:}
+    \begin{enumerate}
+        \item Limpia inmediatamente el historial gráfico (\texttt{\_tempHistory}).
+        \item Resetea el contador \texttt{timeIndex} a 0.
+        \item Lanza corrutina que invoca \texttt{repository.startOven(profile)}.
+    \end{enumerate}
+
+    \item[addGraphPoint(temp)]
+    \textbf{Propósito:} Función auxiliar privada para gestión de memoria de la gráfica.\\
+    \textbf{Lógica Interna:}
+    \begin{enumerate}
+        \item Clona la lista actual de puntos.
+        \item Crea un nuevo objeto \texttt{Entry(x, y)}.
+        \item Verifica si \texttt{lista.size > 120}. Si es cierto, ejecuta \texttt{removeAt(0)} (FIFO).
+        \item Reasigna la lista al \texttt{StateFlow}, notificando a la UI.
+    \end{enumerate}
+
+\end{description}
+
+\section{Módulo: WiFiService (Comunicación de Bajo Nivel)}
+
+Clase encargada de la manipulación directa de Sockets y Streams. Todas las funciones operan bajo el contexto \texttt{Dispatchers.IO}.
+
+\begin{description}[style=multiline, leftmargin=3cm, font=\bfseries\color{accentTeal}]
+
+    \item[connect(ip, port)]
+    \textbf{Propósito:} Establece el túnel TCP.\\
+    \textbf{Lógica Interna:}
+    \begin{enumerate}
+        \item Instancia \texttt{java.net.Socket(ip, port)}.
+        \item Vincula \texttt{PrintWriter} al \textit{OutputStream} (para enviar comandos).
+        \item Vincula \texttt{Scanner} al \textit{InputStream} (para leer respuestas).
+        \item Emite \texttt{true} si no hay excepciones; de lo contrario captura excepción y emite \texttt{false}.
+    \end{enumerate}
+
+    \item[getOvenState()]
+    \textbf{Propósito:} Bucle infinito (mientras haya conexión) de petición-respuesta.\\
+    \textbf{Lógica de Llamadas:}
+    \begin{enumerate}
+        \item Verifica \texttt{socket.isConnected}.
+        \item Llama a método privado \texttt{sendCommand("STATUS?")}.
+        \item Bloquea hilo esperando \texttt{reader.nextLine()}.
+        \item Procesa string raw: \texttt{"STATUS;25.5;150.0;Soak;120"}.
+        \item Mapea a objeto \texttt{OvenState}.
+        \item \texttt{emit(state)} hacia el repositorio.
+        \item \texttt{delay(1000)} para evitar saturación de red.
+    \end{enumerate}
+
+    \item[sendCommand(cmd)]
+    \textbf{Propósito:} Envío físico de bytes por la red.\\
+    \textbf{Lógica Interna:}
+    \begin{enumerate}
+        \item Verifica nulidad del \texttt{writer}.
+        \item Ejecuta \texttt{writer.print(cmd)}.
+        \item Ejecuta \texttt{writer.flush()} obligatoriamente para vaciar el buffer de salida del sistema operativo.
+        \item Maneja posibles \texttt{IOException} logueando el error.
+    \end{enumerate}
+    
+    \item[sendProfile(profile)]
+    \textbf{Propósito:} Serialización de objeto complejo a protocolo ASCII.\\
+    \textbf{Lógica Interna:}
+    \begin{enumerate}
+        \item Itera sobre \texttt{profile.stages}.
+        \item Construye string usando \texttt{joinToString} con delimitador punto y coma.
+        \item Prefija el comando "PROFILE;".
+        \item Llama a \texttt{sendCommand()}.
+    \end{enumerate}
+
+\end{description}
+
+\section{Módulo: ReflowOvenRepository (Patrón Fachada)}
+
+Actúa como intermediario puro para aislar la implementación de red.
+
+\begin{description}[style=multiline, leftmargin=3cm, font=\bfseries\color{primaryBlue}]
+
+    \item[Funciones Pasarela]
+    (\texttt{connect}, \texttt{disconnect}, \texttt{startOven}, etc.)\\
+    \textbf{Lógica:}
+    Estas funciones no contienen lógica de negocio propia. Su única función es reenviar los parámetros recibidos hacia la instancia de \texttt{CommunicationService}. Esto permite que, en el futuro, si se cambia WiFi por Bluetooth, el \texttt{ViewModel} no requiera modificaciones, solo se inyecta un servicio diferente en este repositorio.
+
+\end{description}
+
+\section{Módulo: DashboardScreen (Interfaz de Usuario)}
+
+Funciones Composable que gestionan la renderización y captura de eventos.
+
+\begin{description}[style=multiline, leftmargin=3cm, font=\bfseries\color{accentTeal}]
+
+    \item[ConnectionDialog]
+    \textbf{Propósito:} Modal para ingreso de credenciales de red.\\
+    \textbf{Lógica de Eventos:}
+    \begin{enumerate}
+        \item Mantiene estado local temporal para IP y Puerto (\texttt{remember}).
+        \item Al pulsar "Connect":
+        \begin{itemize}
+            \item Valida conversión de puerto a Int.
+            \item Ejecuta callback \texttt{onConnect(ip, port)}.
+            \item Cierra el diálogo.
+        \end{itemize}
+    \end{enumerate}
+
+    \item[CustomProfileDialog]
+    \textbf{Propósito:} Formulario para creación de perfiles ad-hoc.\\
+    \textbf{Lógica Interna:}
+    \begin{enumerate}
+        \item Captura 5 campos de texto (Nombre, Temp Soak, Tiempo Soak, Temp Reflow, Tiempo Reflow).
+        \item Al confirmar, instancia un nuevo objeto \texttt{ReflowProfile}.
+        \item Devuelve el objeto creado al padre mediante \texttt{onProfileCreated(it)}.
+    \end{enumerate}
+
+    \item[OvenChart (Update Block)]
+    \textbf{Propósito:} Actualización reactiva de la vista de Android clásica.\\
+    \textbf{Lógica de Llamadas:}
+    \begin{enumerate}
+        \item Se ejecuta cada vez que cambia la lista \texttt{points}.
+        \item Si la lista no está vacía:
+        \begin{itemize}
+            \item Obtiene referencia al \texttt{LineDataSet} existente.
+            \item Inyecta la nueva lista de puntos.
+            \item Notifica cambios a la librería gráfica para forzar el repintado (\texttt{invalidate}).
+        \end{itemize}
+        \item Si la lista está vacía, limpia el gráfico (\texttt{chart.clear}).
+    \end{enumerate}
+
+\end{description}
+
+
+\chapter{Conclusión}
+La arquitectura presentada desacopla exitosamente la lógica de control crítica (WiFi/TCP) de la interfaz de usuario moderna (Compose). La distribución de llamadas demuestra un flujo de datos unidireccional (UDF), donde los eventos fluyen hacia arriba (UI $\rightarrow$ ViewModel $\rightarrow$ Repositorio) y los datos fluyen hacia abajo mediante flujos reactivos, resultando en un sistema robusto, mantenible y profesional.
+
+\end{document}
